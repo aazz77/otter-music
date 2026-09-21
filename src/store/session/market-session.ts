@@ -1,0 +1,154 @@
+import { create } from "zustand";
+import { persist, createJSONStorage } from "zustand/middleware";
+import type { MarketPlaylist, ArtistAlbum } from "@/lib/netease/netease-types";
+
+// 抽离初始状态，便于 clearSession 复用
+const INITIAL_MINE_DATA: MineDataState = {
+  recommend: null,
+  created: null,
+  subscribed: null,
+  albums: null,
+  hasMoreAlbums: true,
+};
+
+export interface MineDataState {
+  recommend: MarketPlaylist[] | null;
+  created: MarketPlaylist[] | null;
+  subscribed: MarketPlaylist[] | null;
+  albums: ArtistAlbum[] | null;
+  hasMoreAlbums: boolean;
+}
+
+export interface ListSnapshot {
+  items: MarketPlaylist[];
+  offset: number;
+  hasMore: boolean;
+}
+
+export interface SearchCache {
+  query: string;
+  items: MarketPlaylist[];
+  offset: number;
+  hasMore: boolean;
+}
+
+interface MarketSessionState {
+  mineData: MineDataState;
+  listSnapshots: Record<string, ListSnapshot>;
+  searchCache: SearchCache | null;
+  /** Billboard 历史周榜日期（YYYY-MM-DD，undefined 表示最新一期），会话级缓存 */
+  billboardDate: string | undefined;
+  /** 奖项页上次浏览的年份（key: awardId），会话级缓存 */
+  awardYears: Record<string, number>;
+  setMineData: (
+    data: Partial<MineDataState> | ((prev: MineDataState) => MineDataState)
+  ) => void;
+  saveListSnapshot: (key: string, snapshot: ListSnapshot) => void;
+  saveSearchCache: (cache: SearchCache | null) => void;
+  setBillboardDate: (date: string | undefined) => void;
+  setAwardYear: (awardId: string, year: number) => void;
+  toggleAlbumInSession: (
+    album: {
+      id: string | number;
+      name: string;
+      picUrl: string;
+      artistName?: string;
+    },
+    isSub: boolean
+  ) => void;
+  togglePlaylistInSession: (
+    playlist: MarketPlaylist,
+    shouldSub: boolean
+  ) => void;
+  clearSession: () => void;
+}
+
+export const useMarketSession = create<MarketSessionState>()(
+  persist(
+    (set) => ({
+      mineData: INITIAL_MINE_DATA,
+      listSnapshots: {},
+      searchCache: null,
+      billboardDate: undefined,
+      awardYears: {},
+
+      setMineData: (data) =>
+        set((state) => ({
+          mineData:
+            typeof data === "function"
+              ? data(state.mineData)
+              : { ...state.mineData, ...data },
+        })),
+
+      saveListSnapshot: (key, snapshot) =>
+        set((state) => ({
+          listSnapshots: { ...state.listSnapshots, [key]: snapshot },
+        })),
+
+      saveSearchCache: (cache) => set({ searchCache: cache }),
+
+      setBillboardDate: (billboardDate) => set({ billboardDate }),
+
+      setAwardYear: (awardId, year) =>
+        set((state) => ({
+          awardYears: { ...state.awardYears, [awardId]: year },
+        })),
+
+      toggleAlbumInSession: (album, shouldSub) =>
+        set((state) => {
+          const { albums } = state.mineData;
+          if (!albums) return state;
+
+          const newAlbums = shouldSub
+            ? [
+                {
+                  id: Number(album.id),
+                  name: album.name,
+                  picUrl: album.picUrl,
+                  artist: { name: album.artistName || "" },
+                } as ArtistAlbum,
+                ...albums,
+              ]
+            : albums.filter((a) => String(a.id) !== String(album.id));
+
+          return {
+            mineData: { ...state.mineData, albums: newAlbums },
+          };
+        }),
+
+      togglePlaylistInSession: (playlist, shouldSub) =>
+        set((state) => {
+          const { subscribed } = state.mineData;
+          if (!subscribed) return state;
+
+          const newSubscribed = shouldSub
+            ? [playlist, ...subscribed]
+            : subscribed.filter((p) => String(p.id) !== String(playlist.id));
+
+          return {
+            mineData: { ...state.mineData, subscribed: newSubscribed },
+          };
+        }),
+
+      clearSession: () =>
+        set({
+          mineData: INITIAL_MINE_DATA,
+          listSnapshots: {},
+          searchCache: null,
+          billboardDate: undefined,
+          awardYears: {},
+        }),
+    }),
+    {
+      name: "market-session-storage",
+      storage: createJSONStorage(() => sessionStorage),
+      partialize: (state) => ({
+        mineData: state.mineData,
+        listSnapshots: state.listSnapshots,
+        searchCache: state.searchCache,
+        billboardDate: state.billboardDate,
+        awardYears: state.awardYears,
+      }),
+    }
+  )
+);
